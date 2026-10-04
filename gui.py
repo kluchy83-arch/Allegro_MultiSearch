@@ -1,7 +1,7 @@
 """Desktop GUI Application for Allegro MultiSearch (Tkinter)."""
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, simpledialog
 import threading
 import json
 import csv
@@ -20,6 +20,7 @@ from allegro_search import (
     SellerMatch,
     MultiSellerCombination
 )
+from allegro_search.allegro_api import DEFAULT_VALID_USER_AGENT
 
 
 class ProductRowUI:
@@ -106,10 +107,13 @@ class AllegroMultiSearchGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Allegro MultiSearch — Wyszukiwarka Zestawów Ofert")
-        self.root.geometry("1050x800")
+        self.root.geometry("1080x820")
         self.root.minsize(900, 650)
 
         self.config = AllegroConfig.load()
+        if not self.config.user_agent or "h/tree" in self.config.user_agent:
+            self.config.user_agent = DEFAULT_VALID_USER_AGENT
+
         self.product_rows: List[ProductRowUI] = []
         self.single_seller_matches: List[SellerMatch] = []
         self.combo_matches: List[MultiSellerCombination] = []
@@ -152,35 +156,57 @@ class AllegroMultiSearchGUI:
         self.cfg_client_secret.insert(0, self.config.client_secret)
 
         ttk.Label(frame, text="User-Agent:").grid(row=2, column=0, sticky=tk.W, pady=8)
-        self.cfg_user_agent = ttk.Entry(frame, width=50)
-        self.cfg_user_agent.grid(row=2, column=1, sticky=tk.W, pady=8, padx=10)
+        ua_box = ttk.Frame(frame)
+        ua_box.grid(row=2, column=1, sticky=tk.W, pady=8, padx=10)
+
+        self.cfg_user_agent = ttk.Entry(ua_box, width=40)
+        self.cfg_user_agent.pack(side=tk.LEFT, padx=(0, 5))
         self.cfg_user_agent.insert(0, self.config.user_agent)
+
+        ttk.Button(ua_box, text="Domyślny", command=self._reset_user_agent).pack(side=tk.LEFT)
 
         self.cfg_sandbox_var = tk.BooleanVar(value=self.config.use_sandbox)
         ttk.Checkbutton(frame, text="Użyj Allegro Sandbox (Środowisko Testowe)", variable=self.cfg_sandbox_var).grid(row=3, column=1, sticky=tk.W, pady=8, padx=10)
 
-        # Token Status Label
-        token_status = "🟢 Zalogowano (Token Użytkownika Aktywny)" if self.config.user_access_token else "🔴 Brak tokena użytkownika (Wymagane do wyszukiwania)"
-        self.token_status_lbl = ttk.Label(frame, text=token_status, font=("Helvetica", 10, "bold"))
+        # Token Status
+        status_text = "🟢 Zalogowano konto (Token Użytkownika Aktywny)" if self.config.user_access_token else "⚪ Brak tokena użytkownika (Wymagany do wyszukiwania)"
+        self.token_status_lbl = ttk.Label(frame, text=status_text, font=("Helvetica", 10, "bold"))
         self.token_status_lbl.grid(row=4, column=1, sticky=tk.W, pady=8, padx=10)
 
-        # Buttons
+        # Action Buttons
         btn_box = ttk.Frame(frame)
         btn_box.grid(row=5, column=1, sticky=tk.W, pady=15, padx=10)
 
         self.save_cfg_btn = ttk.Button(btn_box, text="💾 Zapamiętaj Konfigurację", command=self._save_configuration)
         self.save_cfg_btn.pack(side=tk.LEFT, padx=(0, 10))
 
-        self.device_auth_btn = ttk.Button(btn_box, text="🔐 Zaloguj konto Allegro (Device Flow)", command=self._start_device_flow)
+        self.web_auth_btn = ttk.Button(btn_box, text="🌐 Zaloguj w Przeglądarce (Web Flow)", command=self._start_web_auth_flow)
+        self.web_auth_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.device_auth_btn = ttk.Button(btn_box, text="📱 Kod Urządzenia (Device Flow)", command=self._start_device_flow)
         self.device_auth_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.manual_token_btn = ttk.Button(btn_box, text="🔑 Wklej Token", command=self._paste_manual_token)
+        self.manual_token_btn.pack(side=tk.LEFT, padx=(0, 10))
 
         self.test_cfg_btn = ttk.Button(btn_box, text="🔌 Test Połączenia z API", command=self._test_api_connection)
         self.test_cfg_btn.pack(side=tk.LEFT)
 
+    def _reset_user_agent(self):
+        self.cfg_user_agent.delete(0, tk.END)
+        self.cfg_user_agent.insert(0, DEFAULT_VALID_USER_AGENT)
+
     def _save_configuration(self):
         self.config.client_id = self.cfg_client_id.get().strip()
         self.config.client_secret = self.cfg_client_secret.get().strip()
-        self.config.user_agent = self.cfg_user_agent.get().strip() or "AllegroMultiSearch/1.0"
+
+        ua = self.cfg_user_agent.get().strip()
+        if not ua or "h/tree" in ua or "git" in ua:
+            ua = DEFAULT_VALID_USER_AGENT
+            self.cfg_user_agent.delete(0, tk.END)
+            self.cfg_user_agent.insert(0, ua)
+
+        self.config.user_agent = ua
         self.config.use_sandbox = self.cfg_sandbox_var.get()
 
         try:
@@ -188,6 +214,26 @@ class AllegroMultiSearchGUI:
             messagebox.showinfo("Konfiguracja", "Dane konfiguracyjne zostały pomyślnie zapisane!")
         except Exception as e:
             messagebox.showerror("Błąd Zapisu", str(e))
+
+    def _start_web_auth_flow(self):
+        self._save_configuration()
+        client = AllegroAPIClient(self.config)
+
+        def auth_thread():
+            try:
+                client.start_authorization_code_flow(redirect_uri="http://localhost:8080/callback", port=8080)
+                self.root.after(0, self._on_auth_success)
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Błąd Logowania Przeglądarkowego", str(e)))
+
+        t = threading.Thread(target=auth_thread, daemon=True)
+        t.start()
+        messagebox.showinfo(
+            "Logowanie w Przeglądarce",
+            "Otwarto przeglądarkę ze stroną logowania Allegro.\n\n"
+            "Zaloguj się i zaakceptuj uprawnienia dla aplikacji.\n"
+            "Po zalogowaniu token zostanie automatycznie przekazany do aplikacji."
+        )
 
     def _start_device_flow(self):
         self._save_configuration()
@@ -200,15 +246,13 @@ class AllegroMultiSearchGUI:
             device_code = dev_data.get("device_code")
             interval = int(dev_data.get("interval", 5))
 
-            # Open URL in browser
             if verification_uri:
                 webbrowser.open(verification_uri)
 
             msg = (
-                f"Została otwarta strona logowania Allegro.\n\n"
-                f"Twój Kod Logowania:  {user_code}\n\n"
+                f"Kod Logowania:  {user_code}\n\n"
                 f"Adres URL: {verification_uri}\n\n"
-                f"Zaloguj się w przeglądarce i zaakceptuj uprawnienia, a następnie kliknij OK poniżej."
+                f"Zaakceptuj kod w przeglądarce..."
             )
 
             def poll_thread():
@@ -216,7 +260,7 @@ class AllegroMultiSearchGUI:
                 while time.time() - start_t < 300:
                     res = client.poll_device_token(device_code)
                     if "access_token" in res:
-                        self.root.after(0, self._on_device_auth_success)
+                        self.root.after(0, self._on_auth_success)
                         return
                     time.sleep(interval)
                 self.root.after(0, lambda: messagebox.showerror("Przekroczono czas", "Przekroczono czas oczekiwania na logowanie."))
@@ -224,13 +268,20 @@ class AllegroMultiSearchGUI:
             t = threading.Thread(target=poll_thread, daemon=True)
             t.start()
 
-            messagebox.showinfo("Logowanie Allegro Device Flow", msg)
+            messagebox.showinfo("Logowanie Device Flow", msg)
 
         except Exception as e:
-            messagebox.showerror("Błąd Logowania", str(e))
+            messagebox.showerror("Błąd Logowania Device Flow", str(e))
 
-    def _on_device_auth_success(self):
-        self.token_status_lbl.config(text="🟢 Zalogowano (Token Użytkownika Aktywny)")
+    def _paste_manual_token(self):
+        token = simpledialog.askstring("Wklej Access Token", "Jeśli posiadasz gotowy Access Token z Allegro Developer Portal, wklej go poniżej:")
+        if token and token.strip():
+            self.config.user_access_token = token.strip()
+            self.config.save()
+            self._on_auth_success()
+
+    def _on_auth_success(self):
+        self.token_status_lbl.config(text="🟢 Zalogowano konto (Token Użytkownika Aktywny)")
         messagebox.showinfo("Sukces Logowania", "Konto Allegro zostało pomyślnie autoryzowane!\nMożesz teraz wyszukiwać produkty.")
 
     def _test_api_connection(self):
