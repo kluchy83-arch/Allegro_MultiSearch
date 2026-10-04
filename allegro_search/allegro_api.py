@@ -1,11 +1,11 @@
-"""Allegro REST API client with OAuth2, retry logic, rate limiting and caching."""
+"""Allegro REST API client with OAuth2 (client_credentials & device flow), retry logic, rate limiting and caching."""
 
 import requests
 import json
 import time
 import logging
 import urllib.parse
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from .models import Offer, Seller, SearchResult
 from .config import AllegroConfig
 
@@ -24,42 +24,107 @@ class AllegroAPIClient:
         self.config = config or AllegroConfig.load()
 
         if self.config.use_sandbox:
-            self.auth_url = "https://allegro.pl.allegro-sandbox.io/auth/oauth/token"
-            self.api_url = "https://api.allegro.pl.allegro-sandbox.io"
+            self.domain = "allegro.pl.allegro-sandbox.io"
+            self.auth_url = f"https://{self.domain}/auth/oauth/token"
+            self.device_auth_url = f"https://{self.domain}/auth/oauth/device"
+            self.api_url = f"https://api.{self.domain}"
         else:
-            self.auth_url = "https://allegro.pl/auth/oauth/token"
-            self.api_url = "https://api.allegro.pl"
+            self.domain = "allegro.pl"
+            self.auth_url = f"https://{self.domain}/auth/oauth/token"
+            self.device_auth_url = f"https://{self.domain}/auth/oauth/device"
+            self.api_url = f"https://api.{self.domain}"
 
-        self._access_token: Optional[str] = None
+        self._access_token: Optional[str] = self.config.user_access_token or None
+        self._refresh_token: Optional[str] = self.config.user_refresh_token or None
         self._token_expires_at: float = 0.0
         self._offers_cache: Dict[str, Any] = {}
 
+    def initiate_device_flow(self) -> Dict[str, Any]:
+        """Initiate OAuth Device Flow to obtain user bearer token."""
+        if not self.config.client_id or not self.config.client_secret:
+            raise AllegroAPIError("Brak Client ID lub Client Secret.")
+
+        headers = {
+            'User-Agent': self.config.user_agent,
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        data = {'client_id': self.config.client_id}
+
+        try:
+            resp = requests.post(
+                self.device_auth_url,
+                auth=(self.config.client_id, self.config.client_secret),
+                data=data,
+                headers=headers,
+                timeout=12
+            )
+            resp.raise_for_status()
+            return resp.json()  # Returns user_code, device_code, verification_uri, verification_uri_complete, interval, expires_in
+        except Exception as e:
+            raise AllegroAPIError(f"Błąd inicjalizacji OAuth Device Flow: {e}")
+
+    def poll_device_token(self, device_code: str) -> Dict[str, Any]:
+        """Poll for user token after user approves device code."""
+        headers = {
+            'User-Agent': self.config.user_agent,
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        data = {
+            'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
+            'device_code': device_code
+        }
+
+        try:
+            resp = requests.post(
+                self.auth_url,
+                auth=(self.config.client_id, self.config.client_secret),
+                data=data,
+                headers=headers,
+                timeout=12
+            )
+            token_data = resp.json()
+            if resp.status_code == 200:
+                self._access_token = token_data.get('access_token')
+                self._refresh_token = token_data.get('refresh_token')
+                self.config.user_access_token = self._access_token or ""
+                self.config.user_refresh_token = self._refresh_token or ""
+                self.config.save()
+                return token_data
+            else:
+                error = token_data.get('error', 'authorization_pending')
+                return {'error': error, 'message': token_data.get('error_description', '')}
+        except Exception as e:
+            raise AllegroAPIError(f"Błąd sprawdzania statusu autoryzacji: {e}")
+
     def test_connection(self) -> Dict[str, Any]:
-        """Verify Client ID, Client Secret, OAuth token retrieval, and API ping."""
+        """Verify Client ID, Client Secret, OAuth token retrieval, and endpoint access."""
         token = self.authenticate(force=True)
         headers = self.get_headers()
 
-        # Test request to a simple public listing query
         url = f"{self.api_url}/offers/listing"
         params = {'phrase': 'test', 'limit': 1}
         resp = requests.get(url, headers=headers, params=params, timeout=10)
         if resp.status_code == 403:
             raise AllegroAPIError(
-                "Błąd 403: Uzyskano token OAuth, ale brak dostępu do endpointu wyszukiwania.\n"
-                "Upewnij się, że aplikacja została aktywowana w panelu Allegro Developer."
+                "Błąd 403 Forbidden na endpointzie GET /offers/listing.\n\n"
+                "Przyczyna: Użyty token autoryzacji jest tokenem aplikacji (client_credentials).\n"
+                "Endpoint /offers/listing wymaga tokena użytkownika (bearer-token-for-user).\n\n"
+                "Rozwiązanie: Użyj przycisku 'Zaloguj konto Allegro (Device Flow)' w zakładce Konfiguracja!"
             )
         resp.raise_for_status()
-        return {"status": "SUCCESS", "message": "Połączenie z Allegro REST API powiodło się!"}
+        return {"status": "SUCCESS", "message": "Połączenie z Allegro REST API powiodło się! Token użytkownika aktywny."}
 
     def authenticate(self, force: bool = False) -> str:
-        """Obtain client_credentials access token."""
+        """Obtain token. Prefers user access token, falls back to client_credentials."""
         if not self.config.client_id or not self.config.client_secret:
             raise AllegroAPIError("Brak ID klienta lub sekretu Allegro API (Client ID, Client Secret).")
 
-        now = time.time()
-        if not force and self._access_token and now < self._token_expires_at - 60:
+        # If user access token exists in config, use it
+        if self.config.user_access_token and not force:
+            self._access_token = self.config.user_access_token
             return self._access_token
 
+        # Fallback to client_credentials
         data = {'grant_type': 'client_credentials'}
         headers = {
             'User-Agent': self.config.user_agent,
@@ -84,7 +149,7 @@ class AllegroAPIClient:
             token_data = resp.json()
             self._access_token = token_data.get('access_token')
             expires_in = int(token_data.get('expires_in', 43200))
-            self._token_expires_at = now + expires_in
+            self._token_expires_at = time.time() + expires_in
             return self._access_token
         except AllegroAPIError:
             raise
@@ -113,13 +178,11 @@ class AllegroAPIClient:
             try:
                 resp = requests.get(url, headers=headers, params=params, timeout=12)
 
-                # Token expired or revoked
                 if resp.status_code == 401:
                     self.authenticate(force=True)
                     headers = self.get_headers()
                     resp = requests.get(url, headers=headers, params=params, timeout=12)
 
-                # Rate limiting HTTP 429
                 if resp.status_code == 429:
                     retry_after = float(resp.headers.get('Retry-After', backoff))
                     logger.warning(f"Rate limit (429) na Allegro API. Czekanie {retry_after}s...")
@@ -129,8 +192,9 @@ class AllegroAPIClient:
 
                 if resp.status_code == 403:
                     raise AllegroAPIError(
-                        "Błąd 403 (Brak dostępu) w Allegro API. Sprawdź, czy Twoje klucze posiadają "
-                        "uprawnienia do odczytu publicznych ofert Allegro."
+                        "Błąd 403 Forbidden: Endpoint GET /offers/listing wymaga tokena użytkownika (bearer-token-for-user).\n"
+                        "Token aplikacji (client_credentials) nie posiada wymaganych uprawnień.\n"
+                        "Rozwiązanie: Zaloguj konto Allegro przyciskiem 'Zaloguj konto Allegro (Device Flow)' w zakładce Konfiguracja."
                     )
 
                 resp.raise_for_status()
@@ -171,7 +235,7 @@ class AllegroAPIClient:
         if price_to is not None:
             params['price.to'] = str(price_to)
         if condition:
-            params['parameter.11323'] = condition  # Allegro standard parameter id for condition
+            params['parameter.11323'] = condition
 
         url = f"{self.api_url}/offers/listing"
         data = self._execute_request(url, params)

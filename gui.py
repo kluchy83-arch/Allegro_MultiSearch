@@ -7,6 +7,7 @@ import json
 import csv
 import webbrowser
 import os
+import time
 from typing import List, Optional, Dict, Any
 
 from allegro_search import (
@@ -34,7 +35,6 @@ class ProductRowUI:
         self.frame = ttk.LabelFrame(parent, text=f" Przedmiot #{index + 1} ", padding="5")
         self.frame.pack(fill=tk.X, pady=4, anchor=tk.N)
 
-        # Row 1: Main Product Name + Controls
         r1 = ttk.Frame(self.frame)
         r1.pack(fill=tk.X, pady=2)
 
@@ -51,7 +51,6 @@ class ProductRowUI:
         self.budget_entry = ttk.Entry(r1, width=8)
         self.budget_entry.pack(side=tk.LEFT, padx=(0, 10))
 
-        # Reorder / Delete buttons
         btn_del = ttk.Button(r1, text="➖ Usuń", width=8, command=lambda: self.on_remove(self))
         btn_del.pack(side=tk.RIGHT, padx=2)
 
@@ -61,7 +60,6 @@ class ProductRowUI:
         btn_up = ttk.Button(r1, text="↑", width=3, command=lambda: self.on_move_up(self))
         btn_up.pack(side=tk.RIGHT, padx=2)
 
-        # Row 2: Options (Required, Excluded, EAN)
         r2 = ttk.Frame(self.frame)
         r2.pack(fill=tk.X, pady=2)
 
@@ -123,7 +121,6 @@ class AllegroMultiSearchGUI:
         style = ttk.Style()
         style.theme_use('clam')
 
-        # Main notebook tabs
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
@@ -162,14 +159,22 @@ class AllegroMultiSearchGUI:
         self.cfg_sandbox_var = tk.BooleanVar(value=self.config.use_sandbox)
         ttk.Checkbutton(frame, text="Użyj Allegro Sandbox (Środowisko Testowe)", variable=self.cfg_sandbox_var).grid(row=3, column=1, sticky=tk.W, pady=8, padx=10)
 
+        # Token Status Label
+        token_status = "🟢 Zalogowano (Token Użytkownika Aktywny)" if self.config.user_access_token else "🔴 Brak tokena użytkownika (Wymagane do wyszukiwania)"
+        self.token_status_lbl = ttk.Label(frame, text=token_status, font=("Helvetica", 10, "bold"))
+        self.token_status_lbl.grid(row=4, column=1, sticky=tk.W, pady=8, padx=10)
+
         # Buttons
         btn_box = ttk.Frame(frame)
-        btn_box.grid(row=4, column=1, sticky=tk.W, pady=15, padx=10)
+        btn_box.grid(row=5, column=1, sticky=tk.W, pady=15, padx=10)
 
         self.save_cfg_btn = ttk.Button(btn_box, text="💾 Zapamiętaj Konfigurację", command=self._save_configuration)
         self.save_cfg_btn.pack(side=tk.LEFT, padx=(0, 10))
 
-        self.test_cfg_btn = ttk.Button(btn_box, text="🔌 Test Połączenia z Allegro API", command=self._test_api_connection)
+        self.device_auth_btn = ttk.Button(btn_box, text="🔐 Zaloguj konto Allegro (Device Flow)", command=self._start_device_flow)
+        self.device_auth_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.test_cfg_btn = ttk.Button(btn_box, text="🔌 Test Połączenia z API", command=self._test_api_connection)
         self.test_cfg_btn.pack(side=tk.LEFT)
 
     def _save_configuration(self):
@@ -184,8 +189,52 @@ class AllegroMultiSearchGUI:
         except Exception as e:
             messagebox.showerror("Błąd Zapisu", str(e))
 
+    def _start_device_flow(self):
+        self._save_configuration()
+        client = AllegroAPIClient(self.config)
+
+        try:
+            dev_data = client.initiate_device_flow()
+            user_code = dev_data.get("user_code")
+            verification_uri = dev_data.get("verification_uri_complete") or dev_data.get("verification_uri")
+            device_code = dev_data.get("device_code")
+            interval = int(dev_data.get("interval", 5))
+
+            # Open URL in browser
+            if verification_uri:
+                webbrowser.open(verification_uri)
+
+            msg = (
+                f"Została otwarta strona logowania Allegro.\n\n"
+                f"Twój Kod Logowania:  {user_code}\n\n"
+                f"Adres URL: {verification_uri}\n\n"
+                f"Zaloguj się w przeglądarce i zaakceptuj uprawnienia, a następnie kliknij OK poniżej."
+            )
+
+            def poll_thread():
+                start_t = time.time()
+                while time.time() - start_t < 300:
+                    res = client.poll_device_token(device_code)
+                    if "access_token" in res:
+                        self.root.after(0, self._on_device_auth_success)
+                        return
+                    time.sleep(interval)
+                self.root.after(0, lambda: messagebox.showerror("Przekroczono czas", "Przekroczono czas oczekiwania na logowanie."))
+
+            t = threading.Thread(target=poll_thread, daemon=True)
+            t.start()
+
+            messagebox.showinfo("Logowanie Allegro Device Flow", msg)
+
+        except Exception as e:
+            messagebox.showerror("Błąd Logowania", str(e))
+
+    def _on_device_auth_success(self):
+        self.token_status_lbl.config(text="🟢 Zalogowano (Token Użytkownika Aktywny)")
+        messagebox.showinfo("Sukces Logowania", "Konto Allegro zostało pomyślnie autoryzowane!\nMożesz teraz wyszukiwać produkty.")
+
     def _test_api_connection(self):
-        self.save_cfg_btn.invoke()
+        self._save_configuration()
         client = AllegroAPIClient(self.config)
 
         try:
@@ -199,11 +248,9 @@ class AllegroMultiSearchGUI:
         top_frame = ttk.Frame(self.tab_search)
         top_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Left Column: Product List
         left_box = ttk.LabelFrame(top_frame, text=" 🛍️ Lista Poszukiwanych Produktów ", padding="10")
         left_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
 
-        # Scrollable container for products
         self.canvas = tk.Canvas(left_box, borderwidth=0, highlightthickness=0)
         self.scroll_y = ttk.Scrollbar(left_box, orient=tk.VERTICAL, command=self.canvas.yview)
         self.products_container = ttk.Frame(self.canvas)
@@ -215,38 +262,31 @@ class AllegroMultiSearchGUI:
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Product Action Buttons
         p_btn_box = ttk.Frame(left_box)
         p_btn_box.pack(fill=tk.X, pady=(10, 0))
 
         ttk.Button(p_btn_box, text="➕ Dodaj Produkt", command=self._add_product_row).pack(side=tk.LEFT, padx=5)
 
-        # Right Column: Search Options
         right_box = ttk.LabelFrame(top_frame, text=" ⚙️ Opcje & Filtry Wyszukiwania ", padding="10")
         right_box.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
 
-        # Include Delivery
         self.inc_del_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(right_box, text="Uwzględniaj koszty dostawy", variable=self.inc_del_var).pack(anchor=tk.W, pady=5)
 
-        # Max Delivery Cost
         ttk.Label(right_box, text="Maks. koszt dostawy (zł):").pack(anchor=tk.W, pady=(5, 0))
         self.max_del_entry = ttk.Entry(right_box, width=15)
         self.max_del_entry.pack(anchor=tk.W, pady=(0, 10))
 
-        # Condition
         ttk.Label(right_box, text="Stan produktu:").pack(anchor=tk.W, pady=(5, 0))
         self.condition_combo = ttk.Combobox(right_box, values=["Wszystkie", "Nowe", "Używane"], state="readonly")
         self.condition_combo.current(0)
         self.condition_combo.pack(anchor=tk.W, pady=(0, 10))
 
-        # Sort Order
         ttk.Label(right_box, text="Sortowanie ofert na Allegro:").pack(anchor=tk.W, pady=(5, 0))
         self.sort_combo = ttk.Combobox(right_box, values=["Trafność", "Cena: od najniższej", "Cena: od najwyższej"], state="readonly")
         self.sort_combo.current(1)
         self.sort_combo.pack(anchor=tk.W, pady=(0, 15))
 
-        # Bottom Frame: Search Action + Progress
         bottom_box = ttk.Frame(self.tab_search, padding="10")
         bottom_box.pack(fill=tk.X, pady=(10, 0))
 
@@ -259,7 +299,6 @@ class AllegroMultiSearchGUI:
         self.status_lbl = ttk.Label(bottom_box, text="Gotowy do wyszukiwania.")
         self.status_lbl.pack(side=tk.RIGHT)
 
-        # Initial default products
         self._add_product_row_with_text("LEGO Technic 42154")
         self._add_product_row_with_text("Raspberry Pi 5 8GB")
         self._add_product_row_with_text("karta microSD 256GB")
@@ -324,11 +363,9 @@ class AllegroMultiSearchGUI:
         self.start_btn.config(state=tk.DISABLED)
         self.pbar['value'] = 0
 
-        # Sort map
         sort_map = {"Trafność": None, "Cena: od najniższej": "p", "Cena: od najwyższej": "pd"}
         sort_val = sort_map.get(self.sort_combo.get())
 
-        # Condition map
         cond_map = {"Wszystkie": None, "Nowe": "NEW", "Używane": "USED"}
         cond_val = cond_map.get(self.condition_combo.get())
 
@@ -363,7 +400,6 @@ class AllegroMultiSearchGUI:
                 progress_callback=progress_cb
             )
 
-            # Compute multi-seller combinations if needed
             combos = MultiSellerCombiner.find_best_combinations(queries, matches, max_sellers=3, top_n=5)
 
             self.root.after(0, self._on_search_complete, matches, combos)
@@ -391,7 +427,6 @@ class AllegroMultiSearchGUI:
 
     # --- TAB 3: RESULTS & RANKING ---
     def _build_results_tab(self):
-        # Top Action Bar (Export / Filter buttons)
         top_bar = ttk.Frame(self.tab_results)
         top_bar.pack(fill=tk.X, pady=(0, 10))
 
@@ -400,7 +435,6 @@ class AllegroMultiSearchGUI:
         ttk.Button(top_bar, text="💾 Eksportuj do JSON", command=self._export_json).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_bar, text="📋 Kopiuj Wyniki do Schowka", command=self._copy_results_to_clipboard).pack(side=tk.LEFT, padx=5)
 
-        # Sub-Notebook for Results Types
         self.res_notebook = ttk.Notebook(self.tab_results)
         self.res_notebook.pack(fill=tk.BOTH, expand=True)
 
@@ -410,11 +444,9 @@ class AllegroMultiSearchGUI:
         self.res_notebook.add(self.sub_tab_ranking, text=" 🏆 Ranking Jednego Sprzedawcy ")
         self.res_notebook.add(self.sub_tab_combos, text=" 🧩 Najlepsze Kombinacje (Wielu Sprzedawców) ")
 
-        # --- Ranking Subtab UI ---
         r_split = ttk.PanedWindow(self.sub_tab_ranking, orient=tk.HORIZONTAL)
         r_split.pack(fill=tk.BOTH, expand=True)
 
-        # Left: Treeview Ranking
         left_f = ttk.Frame(r_split)
         r_split.add(left_f, weight=1)
 
@@ -445,7 +477,6 @@ class AllegroMultiSearchGUI:
 
         self.ranking_tree.bind("<<TreeviewSelect>>", self._on_ranking_selected)
 
-        # Right: Card Detailed View
         right_f = ttk.LabelFrame(r_split, text=" 💳 Karta Sprzedawcy & Zestaw Ofert ", padding="10")
         r_split.add(right_f, weight=2)
 
@@ -456,7 +487,6 @@ class AllegroMultiSearchGUI:
         self.card_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         c_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # --- Combos Subtab UI ---
         c_split = ttk.PanedWindow(self.sub_tab_combos, orient=tk.HORIZONTAL)
         c_split.pack(fill=tk.BOTH, expand=True)
 
@@ -495,7 +525,6 @@ class AllegroMultiSearchGUI:
         cc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
     def _render_results(self):
-        # Clear Ranking
         for item in self.ranking_tree.get_children():
             self.ranking_tree.delete(item)
         self.card_text.delete("1.0", tk.END)
@@ -523,7 +552,6 @@ class AllegroMultiSearchGUI:
         if self.single_seller_matches:
             self.ranking_tree.selection_set("0")
 
-        # Clear Combos
         for item in self.combo_tree.get_children():
             self.combo_tree.delete(item)
         self.combo_card_text.delete("1.0", tk.END)
