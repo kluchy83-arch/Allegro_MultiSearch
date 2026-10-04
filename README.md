@@ -33,6 +33,23 @@ Narzędzie oferuje interfejs wiersza poleceń (**CLI**) oraz interfejs graficzny
 
 ---
 
+## 🪟 Wersja Plik Wykonywalny (.exe) dla Windows x64
+
+Dla użytkowników systemu Windows, narzędzie można uruchomić jako gotowy plik `.exe` bez konieczności instalowania Pythona:
+
+1. **Automatyczna kompilacja na GitHubie**:
+   - Po wysłaniu kodu na GitHub, plik `AllegroMultiItemFinder.exe` jest automatycznie budowany przez **GitHub Actions** i dostępny do pobrania w zakładce **Actions -> Artifacts**.
+
+2. **Samodzielna kompilacja na Windows**:
+   - Uruchom skrypt `build_windows.bat` lub wykonaj komendę:
+     ```cmd
+     pip install pyinstaller -r requirements.txt
+     pyinstaller --onefile --name="AllegroMultiItemFinder" cli.py
+     ```
+   - Gotowy plik `.exe` znajdziesz w folderze `dist/AllegroMultiItemFinder.exe`.
+
+---
+
 ## 💻 Użycie
 
 ### 1. Interfejs konsolowy (CLI)
