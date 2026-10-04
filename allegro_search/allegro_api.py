@@ -16,9 +16,15 @@ class AllegroAPIError(Exception):
 class AllegroAPIClient:
     """Client for Allegro REST API (Web API v1)."""
 
+    DEFAULT_USER_AGENT = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36 AllegroMultiItemFinder/1.0"
+    )
+
     def __init__(self, client_id: Optional[str] = None, client_secret: Optional[str] = None, sandbox: bool = False):
-        self.client_id = client_id or os.environ.get("ALLEGRO_CLIENT_ID", "")
-        self.client_secret = client_secret or os.environ.get("ALLEGRO_CLIENT_SECRET", "")
+        self.client_id = (client_id or os.environ.get("ALLEGRO_CLIENT_ID", "")).strip()
+        self.client_secret = (client_secret or os.environ.get("ALLEGRO_CLIENT_SECRET", "")).strip()
         self.sandbox = sandbox
 
         if self.sandbox:
@@ -36,17 +42,29 @@ class AllegroAPIClient:
             raise AllegroAPIError("Brak ID klienta lub sekretu Allegro API (Client ID, Client Secret).")
 
         data = {'grant_type': 'client_credentials'}
+        headers = {
+            'User-Agent': self.DEFAULT_USER_AGENT,
+            'Accept': 'application/json'
+        }
         try:
             resp = requests.post(
                 self.auth_url,
                 auth=(self.client_id, self.client_secret),
                 data=data,
+                headers=headers,
                 timeout=10
             )
+            if resp.status_code == 401 or resp.status_code == 403:
+                raise AllegroAPIError(
+                    f"Błąd autoryzacji ({resp.status_code}): Nieprawidłowy Client ID lub Client Secret "
+                    f"dla wybranego środowiska ({'Sandbox' if self.sandbox else 'Produkcyjne Allegro'})."
+                )
             resp.raise_for_status()
             token_data = resp.json()
             self._access_token = token_data.get('access_token')
             return self._access_token
+        except AllegroAPIError:
+            raise
         except Exception as e:
             raise AllegroAPIError(f"Błąd uwierzytelniania w Allegro API: {e}")
 
@@ -56,7 +74,8 @@ class AllegroAPIClient:
         return {
             'Authorization': f'Bearer {self._access_token}',
             'Accept': 'application/vnd.allegro.public.v1+json',
-            'Content-Type': 'application/vnd.allegro.public.v1+json'
+            'Content-Type': 'application/vnd.allegro.public.v1+json',
+            'User-Agent': self.DEFAULT_USER_AGENT
         }
 
     def search_offers(self, phrase: str, seller_id: Optional[str] = None, limit: int = 60) -> List[Offer]:
@@ -72,10 +91,28 @@ class AllegroAPIClient:
 
         url = f"{self.api_url}/offers/listing"
         try:
-            resp = requests.get(url, headers=headers, params=params, timeout=10)
+            resp = requests.get(url, headers=headers, params=params, timeout=12)
+
+            # If token expired or rejected, retry authentication once
+            if resp.status_code in (401, 403):
+                self.authenticate()
+                headers = self.get_headers()
+                resp = requests.get(url, headers=headers, params=params, timeout=12)
+
+            if resp.status_code == 403:
+                raise AllegroAPIError(
+                    "Błąd 403 (Brak dostępu) przy wyszukiwaniu ofert na Allegro API.\n"
+                    "Sprawdź:\n"
+                    "1. Czy wprowadzony Client ID i Client Secret są poprawne.\n"
+                    "2. Czy zaznaczenie 'Użyj Allegro Sandbox' zgadza się z typem zarejestrowanej aplikacji.\n"
+                    "3. Czy aplikacja posiada uprawnienia dostępu do publicznego API Allegro."
+                )
+
             resp.raise_for_status()
             data = resp.json()
             return self._parse_offers_response(data)
+        except AllegroAPIError:
+            raise
         except Exception as e:
             raise AllegroAPIError(f"Błąd podczas wyszukiwania 'phrase={phrase}': {e}")
 
