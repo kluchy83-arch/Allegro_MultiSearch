@@ -67,8 +67,9 @@ class AllegroAPIClient:
     def __init__(self, config: Optional[AllegroConfig] = None):
         self.config = config or AllegroConfig.load()
 
-        # Ensure user_agent is valid browser UA
-        if not self.config.user_agent or "h/tree" in self.config.user_agent or "git" in self.config.user_agent:
+        # Ensure user_agent is always a valid browser string
+        ua = self.config.user_agent.strip()
+        if not ua or "h/tree" in ua or "git" in ua or "Mozilla" not in ua:
             self.config.user_agent = DEFAULT_VALID_USER_AGENT
 
         if self.config.use_sandbox:
@@ -88,7 +89,7 @@ class AllegroAPIClient:
 
     def get_user_agent(self) -> str:
         ua = self.config.user_agent.strip()
-        if not ua or "h/tree" in ua:
+        if not ua or "h/tree" in ua or "git" in ua or "Mozilla" not in ua:
             return DEFAULT_VALID_USER_AGENT
         return ua
 
@@ -269,7 +270,35 @@ class AllegroAPIClient:
         if not self.config.client_id or not self.config.client_secret:
             raise AllegroAPIError("Brak Client ID lub Client Secret.")
 
-        # Test OAuth credentials via client_credentials
+        # If user_access_token exists, try testing endpoint /offers/listing directly first
+        if self.config.user_access_token:
+            try:
+                headers = self.get_headers()
+                url = f"{self.api_url}/offers/listing"
+                params = {'phrase': 'test', 'limit': 1}
+                r_list = requests.get(url, headers=headers, params=params, timeout=10)
+
+                if r_list.status_code == 401 and self.config.user_refresh_token:
+                    # Token expired, refresh and retry
+                    self.refresh_user_token()
+                    headers = self.get_headers()
+                    r_list = requests.get(url, headers=headers, params=params, timeout=10)
+
+                if r_list.status_code == 200:
+                    return {"status": "SUCCESS", "message": "Połączenie z Allegro REST API powiodło się! Token użytkownika jest aktywny."}
+                else:
+                    err_json = r_list.json() if r_list.headers.get("content-type", "").startswith("application/") else {}
+                    err_msg = err_json.get("error_description") or err_json.get("message") or r_list.text[:200]
+                    raise AllegroAPIError(
+                        f"Błąd {r_list.status_code} na /offers/listing: {err_msg}\n\n"
+                        "Zaloguj się ponownie przyciskiem 'Zaloguj w Przeglądarce (Web Flow)'."
+                    )
+            except AllegroAPIError:
+                raise
+            except Exception as e:
+                raise AllegroAPIError(f"Błąd weryfikacji tokena użytkownika: {e}")
+
+        # Fallback test: verify client credentials
         data = {'grant_type': 'client_credentials'}
         headers = {
             'User-Agent': self.get_user_agent(),
@@ -289,20 +318,6 @@ class AllegroAPIClient:
             )
         resp.raise_for_status()
 
-        # If user access token is set, test GET /offers/listing with user token
-        if self.config.user_access_token:
-            headers = self.get_headers()
-            url = f"{self.api_url}/offers/listing"
-            params = {'phrase': 'test', 'limit': 1}
-            r_list = requests.get(url, headers=headers, params=params, timeout=10)
-            if r_list.status_code == 403:
-                raise AllegroAPIError(
-                    "Token użytkownika wygasł lub nie posiada uprawnień do /offers/listing.\n"
-                    "Zaloguj się ponownie przyciskiem 'Zaloguj w Przeglądarce (Web Flow)'."
-                )
-            r_list.raise_for_status()
-            return {"status": "SUCCESS", "message": "Client ID / Secret poprawne! Połączenie z Allegro REST API oraz token użytkownika są aktywne."}
-
         return {
             "status": "SUCCESS",
             "message": "Client ID oraz Client Secret są poprawne!\n\n"
@@ -320,7 +335,6 @@ class AllegroAPIClient:
             except Exception:
                 pass
 
-        # Fallback to client_credentials token
         data = {'grant_type': 'client_credentials'}
         headers = {
             'User-Agent': self.get_user_agent(),
@@ -390,8 +404,10 @@ class AllegroAPIClient:
                     continue
 
                 if resp.status_code == 403:
+                    err_json = resp.json() if resp.headers.get("content-type", "").startswith("application/") else {}
+                    err_msg = err_json.get("error_description") or err_json.get("message") or resp.text[:200]
                     raise AllegroAPIError(
-                        "Błąd 403 Forbidden na endpointzie GET /offers/listing.\n"
+                        f"Błąd 403 Forbidden na endpointzie GET /offers/listing ({err_msg}).\n"
                         "Sprawdź pole User-Agent w Konfiguracji lub zaloguj konto przyciskiem 'Zaloguj w Przeglądarce (Web Flow)'."
                     )
 

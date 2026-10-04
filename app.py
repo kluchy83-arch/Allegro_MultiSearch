@@ -1,36 +1,32 @@
-"""Streamlit Web UI for Allegro Multi-Item Finder."""
+"""Streamlit Web UI for Allegro MultiSearch."""
 
 import streamlit as st
 import pandas as pd
 import json
 import os
-from allegro_search import MultiItemFinder, AllegroAPIClient, AllegroAPIError
+from allegro_search import MultiItemFinder, AllegroAPIClient, AllegroConfig, ProductQuery, AllegroAPIError
 
 st.set_page_config(
-    page_title="Allegro Multi-Item Finder",
+    page_title="Allegro MultiSearch",
     page_icon="🛍️",
     layout="wide"
 )
 
-st.title("🛍️ Allegro Multi-Item Finder")
+st.title("🛍️ Allegro MultiSearch")
 st.markdown("Znajdź sprzedawcę na Allegro, który posiada **wszystkie lub większość** poszukiwanych przez Ciebie przedmiotów! Zaoszczędź na wysyłce.")
 
 st.sidebar.header("🔑 Dane Logowania Allegro API")
 
-client_id = st.sidebar.text_input("Client ID", value=os.environ.get("ALLEGRO_CLIENT_ID", ""), type="password")
-client_secret = st.sidebar.text_input("Client Secret", value=os.environ.get("ALLEGRO_CLIENT_SECRET", ""), type="password")
-use_sandbox = st.sidebar.checkbox("Użyj środowiska Sandbox", value=False)
+config = AllegroConfig.load()
 
-st.sidebar.subheader("Filtry dopasowania")
-match_mode = st.sidebar.selectbox(
-    "Tryb szukania",
-    ["Wszystkie przedmioty u jednego sprzedawcy (100% dopasowania)", "Częściowe dopasowanie (min. N przedmiotów)"]
-)
+client_id = st.sidebar.text_input("Client ID", value=config.client_id, type="password")
+client_secret = st.sidebar.text_input("Client Secret", value=config.client_secret, type="password")
+use_sandbox = st.sidebar.checkbox("Użyj środowiska Sandbox", value=config.use_sandbox)
 
-require_all = (match_mode == "Wszystkie przedmioty u jednego sprzedawcy (100% dopasowania)")
-min_items = 2
-if not require_all:
-    min_items = st.sidebar.number_input("Minimalna liczba dopasowanych przedmiotów", min_value=2, max_value=10, value=2)
+if client_id and client_secret:
+    config.client_id = client_id
+    config.client_secret = client_secret
+    config.use_sandbox = use_sandbox
 
 st.subheader("1. Wprowadź poszukiwane przedmioty")
 
@@ -39,7 +35,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     raw_input = st.text_area(
         "Wpisz nazwy/fraze przedmiotów (rozdziel odnośnikami, przecinkami lub nową linią):",
-        value="wiedźmin\ndiuna\nwładca pierścieni",
+        value="LEGO Technic 42154\nRaspberry Pi 5 8GB\nkarta microSD 256GB",
         height=120
     )
 
@@ -50,22 +46,19 @@ search_button = st.button("🔎 Szukaj Sprzedawców", type="primary")
 if search_button:
     if not keywords:
         st.warning("⚠️ Proszę wprowadzić przynajmniej jeden przedmiot.")
-    elif not client_id or not client_secret:
+    elif not config.client_id or not config.client_secret:
         st.error("❌ Musisz podać Client ID oraz Client Secret dla Allegro API!")
     else:
         st.info(f"Szukanie dla {len(keywords)} przedmiotów: **{', '.join(keywords)}**")
 
         try:
-            client = AllegroAPIClient(client_id=client_id, client_secret=client_secret, sandbox=use_sandbox)
+            client = AllegroAPIClient(config)
             client.authenticate()
+            queries = [ProductQuery(name=k) for k in keywords]
             finder = MultiItemFinder(client)
 
             with st.spinner("Przeszukiwanie ofert na Allegro..."):
-                matches = finder.find_sellers(
-                    keywords=keywords,
-                    require_all=require_all,
-                    min_items=min_items
-                )
+                matches = finder.find_sellers(queries=queries)
 
             if not matches:
                 st.warning("Nie znaleziono sprzedawców spełniających kryteria.")
@@ -76,14 +69,15 @@ if search_button:
                     seller_name = match.seller.login
                     super_badge = "⭐ Super Sprzedawca" if match.seller.is_super_seller else ""
 
-                    with st.expander(f"#{idx} Sprzedawca: **{seller_name}** {super_badge} | Dopasowania: **{match.matched_keywords_count}/{len(keywords)}** | Min. łączna cena: **{match.min_total_price:.2f} PLN**", expanded=(idx == 1)):
+                    with st.expander(f"#{idx} Sprzedawca: **{seller_name}** {super_badge} | Pokrycie: **{match.matched_count}/{len(keywords)}** | Razem z dostawą: **{match.total_price_with_delivery:.2f} PLN**", expanded=(idx == 1)):
 
                         st.markdown(f"**Sugerowany zestaw od sprzedawcy {seller_name}:**")
 
                         table_data = []
-                        for kw, offer in match.best_offers.items():
+                        for q_name, m_offer in match.best_offers.items():
+                            offer = m_offer.offer
                             table_data.append({
-                                "Poszukiwana fraza": kw,
+                                "Poszukiwana fraza": q_name,
                                 "Tytuł oferty": offer.title,
                                 "Cena": f"{offer.price:.2f} {offer.currency}",
                                 "Smart": "TAK" if offer.is_smart else "NIE",
@@ -93,23 +87,15 @@ if search_button:
                         df = pd.DataFrame(table_data)
                         st.dataframe(df, use_container_width=True)
 
-                        st.markdown("---")
-                        st.caption("Wszystkie oferty od tego sprzedawcy podzielone na frazy:")
-                        for kw, offers_list in match.offers_by_keyword.items():
-                            st.write(f"• **{kw}** ({len(offers_list)} ofert):")
-                            for off in offers_list:
-                                smart_tag = "🚀 [SMART]" if off.is_smart else ""
-                                st.markdown(f"  - [{off.title}]({off.url}) — **{off.price:.2f} {off.currency}** {smart_tag}")
-
                 st.subheader("📥 Eksportuj wyniki")
                 export_data = []
                 for m in matches:
                     s_info = {
                         "seller": m.seller.login,
                         "is_super_seller": m.seller.is_super_seller,
-                        "matched_keywords_count": m.matched_keywords_count,
-                        "min_total_price": m.min_total_price,
-                        "best_offers": {k: {"title": o.title, "price": o.price, "url": o.url} for k, o in m.best_offers.items()}
+                        "matched_count": m.matched_count,
+                        "grand_total": m.total_price_with_delivery,
+                        "best_offers": {k: {"title": v.offer.title, "price": v.offer.price, "url": v.offer.url} for k, v in m.best_offers.items()}
                     }
                     export_data.append(s_info)
 
@@ -117,7 +103,7 @@ if search_button:
                 st.download_button(
                     label="Pobierz wyniki jako JSON",
                     data=json_str,
-                    file_name="allegro_multi_item_results.json",
+                    file_name="allegro_multisearch_results.json",
                     mime="application/json"
                 )
 
