@@ -1,71 +1,88 @@
-# 🛍️ Allegro Multi-Item Finder
+# 🛍️ Allegro MultiSearch
 
-Narzędzie w języku Python służące do jednoczesnego wyszukiwania 2 lub więcej przedmiotów u **jednego sprzedawcy na Allegro**.
-Pozwala to zaoszczędzić czas oraz koszty dostawy (np. skorzystać z jednej paczki w ramach Allegro Smart!).
-
-Narzędzie oferuje okienkowy interfejs graficzny (**Desktop GUI** w Tkinter), interfejs webowy (**Streamlit**) oraz linię poleceń (**CLI**).
+Kompletna aplikacja desktopowa w języku Python służąca do jednoczesnego wyszukiwania wielu produktów na Allegro i automatycznego znajdowania sprzedawców oferujących pełne zestawy w najniższych cenach.
 
 ---
 
-## 🚀 Funkcje
+## 🚀 Główne Funkcje
 
-- **Wyszukiwanie jednoczesne**: Podaj listę produktów (np. `Wiedźmin`, `Diuna`, `Myszka`), a narzędzie znajdzie sprzedawców posiadających je wszystkie.
-- **Interfejs Graficzny GUI (Desktop)**: Wpisz swoje `Client ID` oraz `Client Secret` z Allegro Developer bezpośrednio w formularzu okienkowym.
-- **Obsługa częściowego dopasowania**: Możliwość znalezienia sprzedawców posiadających np. min. 2 z 3 szukanych przedmiotów.
-- **Obliczanie najniższej łącznej ceny**: Automatyczny wybór najtańszego zestawu ofert u każdego ze sprzedawców.
-- **Eksport wyników**: Zapis wyników do plików **JSON** i **CSV**.
-- **Kompilacja do EXE (Windows x64)**: Gotowa wersja bez konieczności instalowania Pythona.
+- **Równoległe wyszukiwanie zestawu produktów**: Podaj dowolną liczbę poszukiwanych przedmiotów (np. *LEGO Technic 42154*, *Raspberry Pi 5 8GB*, *karta microSD 256GB*, *kabel HDMI 2.1*).
+- **Ranking sprzedawców wg pokrycia i ceny**:
+  1. Największa liczba dostępnych produktów ($N/M$).
+  2. Najniższa cena łączna wraz z szacowanym kosztem dostawy (z uwzględnieniem Allegro Smart!).
+- **Analiza kombinacji wielu sprzedawców**: Jeśli żaden sprzedawca nie posiada 100% produktów, aplikacja wyznacza optymalne połączenie (np. *Sprzedawca A + Sprzedawca B = 100% zestawu*) przy najniższym łącznym koszcie.
+- **Bezpieczne przechowywanie kluczy API**: Obsługa zmiennych środowiskowych `.env` oraz lokalnego szyfrowania konfiguracji. Pole Client Secret jest ukryte i nigdy nie trafia do kodu źródłowego.
+- **Test połączenia z Allegro API**: Przycisk pozwalający błyskawicznie sprawdzić poprawność Client ID, Client Secret oraz tokena OAuth.
+- **Dopasowywanie ofert i filtrowanie**: Ocenianie jakości dopasowania (*Dopasowanie wysokie*, *Dopasowanie średnie*, *Dopasowanie niskie*), opcjonalny budżet, słowa wymagane, słowa wykluczone oraz kod EAN.
+- **Eksport wyników**: Zapis wyników do formatów **CSV**, **Excel (.xlsx)**, **JSON** oraz **Kopiowanie do schowka**.
+- **Wymagania Allegro REST API**: Komunikacja wyłącznie przez oficjalne REST API. Zerowe użycie scrapowania HTML czy Selenium.
+
+---
+
+## ⚙️ Wymagania i Konfiguracja Allegro API
+
+Aplikacja wymaga oficjalnych kluczy dostępowych zarejestrowanych w [Allegro Developer Apps](https://apps.developer.allegro.pl/):
+
+1. **ALLEGRO_CLIENT_ID**
+2. **ALLEGRO_CLIENT_SECRET**
+3. **ALLEGRO_USER_AGENT**
+
+### Konfiguracja w pliku `.env` (Opcjonalnie)
+
+Utwórz plik `.env` na podstawie `.env.example`:
+```env
+ALLEGRO_CLIENT_ID=twój_client_id
+ALLEGRO_CLIENT_SECRET=twój_client_secret
+ALLEGRO_USER_AGENT=AllegroMultiSearch/1.0 (Windows NT 10.0; Win64; x64)
+```
+
+Wszystkie parametry można także wygodnie podać bezpośrednio w zakładce **⚙️ Konfiguracja Allegro API** w aplikacji i kliknąć **„Zapamiętaj Konfigurację”**.
 
 ---
 
 ## 🪟 Plik Wykonywalny (.exe) dla Windows x64
 
-Dla użytkowników systemu Windows, narzędzie działa jako samodzielna aplikacja okienkowa `.exe`:
+Dla użytkowników systemu Windows, aplikację można uruchomić bez instalowania Pythona:
 
 1. **Automatyczna kompilacja na GitHubie**:
-   - Po opublikowaniu na GitHubie plik `AllegroMultiItemFinderGUI.exe` jest automatycznie budowany przez **GitHub Actions** i dostępny do pobrania w zakładce **Actions -> Artifacts**.
+   - Po opublikowaniu na GitHubie plik `AllegroMultiItemFinderGUI.exe` jest automatycznie budowany przez **GitHub Actions** i dostępny w zakładce **Actions -> Artifacts**.
 
 2. **Samodzielna kompilacja na Windows**:
-   - Uruchom skrypt `build_windows.bat` lub wykonaj komendę w konsoli:
+   - Uruchom plik `build_windows.bat`:
      ```cmd
-     pip install -r requirements.txt pyinstaller
-     pyinstaller --noconsole --onefile --name="AllegroMultiItemFinderGUI" gui.py
+     build_windows.bat
      ```
-   - Gotowy plik okienkowy `.exe` znajdziesz w folderze `dist/AllegroMultiItemFinderGUI.exe`.
+   - Gotowy plik okienkowy znajdziesz w `dist/AllegroMultiItemFinderGUI.exe`.
 
 ---
 
 ## 💻 Uruchamianie z kodu źródłowego
 
-### 1. Aplikacja Okienkowa GUI (Tkinter)
+Instalacja wymaganych bibliotek:
+```bash
+pip install -r requirements.txt
+```
+
+Uruchomienie interfejsu graficznego (GUI):
 ```bash
 python3 gui.py
 ```
 
-### 2. Aplikacja Webowa (Streamlit)
+Uruchomienie interfejsu webowego (Streamlit):
 ```bash
 streamlit run app.py
 ```
 
-### 3. Interfejs Konsolowy (CLI)
+Uruchomienie konsolowe (CLI):
 ```bash
-python3 cli.py --client-id "twój_client_id" --client-secret "twój_client_secret" "ksiazka" "kawiarka"
+python3 cli.py --client-id "twój_id" --client-secret "twój_secret" "LEGO Technic" "Raspberry Pi"
 ```
 
 ---
 
-## 🔑 Jak uzyskać Client ID oraz Client Secret?
+## 🧪 Testy Jednostkowe
 
-1. Zaloguj się na swoje konto Allegro na stronie [Allegro Developer Apps](https://apps.developer.allegro.pl/).
-2. Kliknij **Zarejestruj nową aplikację**.
-3. Wybierz typ aplikacji (np. *Aplikacja osobista / REST API*).
-4. Skopiuj wygenerowany **Client ID** oraz **Client Secret** i wklej w pola aplikacji.
-
----
-
-## 🧪 Testy
-
-Aby uruchomić testy jednostkowe:
+Uruchomienie testów z mockowaniem zapytań API:
 ```bash
 python3 -m unittest discover tests
 ```
