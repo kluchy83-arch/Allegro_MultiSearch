@@ -1,8 +1,9 @@
 """Unit tests for Allegro Multi-Item Finder."""
 
 import unittest
-from allegro_search.models import Seller, Offer, SellerMatch, SearchResult
-from allegro_search.allegro_api import DemoAllegroClient, AllegroAPIClient, AllegroAPIError
+from unittest.mock import MagicMock
+from allegro_search.models import Seller, Offer, SellerMatch
+from allegro_search.allegro_api import AllegroAPIClient, AllegroAPIError
 from allegro_search.finder import MultiItemFinder
 
 
@@ -37,40 +38,41 @@ class TestModels(unittest.TestCase):
         self.assertEqual(best["książka 2"].id, "3")
 
 
-class TestDemoAllegroClient(unittest.TestCase):
-    def setUp(self):
-        self.client = DemoAllegroClient()
-
-    def test_search_known_catalog(self):
-        offers = self.client.search_offers("wiedźmin")
-        self.assertGreater(len(offers), 0)
-        self.assertTrue(all("wiedźmin" in o.title.lower() or "w1" in o.id or "w2" in o.id or "w3" in o.id for o in offers))
-
-    def test_search_with_seller_filter(self):
-        offers = self.client.search_offers("wiedźmin", seller_id="101")
-        self.assertEqual(len(offers), 1)
-        self.assertEqual(offers[0].seller.id, "101")
-
-
 class TestMultiItemFinder(unittest.TestCase):
     def setUp(self):
-        self.client = DemoAllegroClient()
-        self.finder = MultiItemFinder(self.client)
+        self.mock_client = MagicMock(spec=AllegroAPIClient)
+        self.seller_a = Seller(id="101", login="SellerA", is_super_seller=True)
+        self.seller_b = Seller(id="102", login="SellerB", is_super_seller=False)
+
+        self.offer_w1 = Offer("w1", "Wiedźmin 1", 30.0, "PLN", self.seller_a, "http://w1")
+        self.offer_w2 = Offer("w2", "Wiedźmin 2", 35.0, "PLN", self.seller_b, "http://w2")
+
+        self.offer_d1 = Offer("d1", "Diuna 1", 40.0, "PLN", self.seller_a, "http://d1")
 
     def test_find_sellers_require_all(self):
-        matches = self.finder.find_sellers(["wiedźmin", "diuna"], require_all=True)
-        self.assertGreater(len(matches), 0)
-        for m in matches:
-            self.assertEqual(m.matched_keywords_count, 2)
+        def mock_search(phrase, seller_id=None, limit=60):
+            if phrase == "wiedźmin":
+                return [self.offer_w1, self.offer_w2]
+            elif phrase == "diuna":
+                if seller_id == "101":
+                    return [self.offer_d1]
+                elif seller_id == "102":
+                    return []
+                return [self.offer_d1]
+            return []
 
-    def test_find_sellers_partial_match(self):
-        matches = self.finder.find_sellers(["wiedźmin", "diuna", "myszka"], require_all=False, min_items=2)
-        self.assertGreater(len(matches), 0)
-        for m in matches:
-            self.assertGreaterEqual(m.matched_keywords_count, 2)
+        self.mock_client.search_offers.side_effect = mock_search
+
+        finder = MultiItemFinder(self.mock_client)
+        matches = finder.find_sellers(["wiedźmin", "diuna"], require_all=True)
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].seller.login, "SellerA")
+        self.assertEqual(matches[0].min_total_price, 70.0)
 
     def test_empty_keywords(self):
-        matches = self.finder.find_sellers([])
+        finder = MultiItemFinder(self.mock_client)
+        matches = finder.find_sellers([])
         self.assertEqual(matches, [])
 
 

@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import json
 import os
-from allegro_search import MultiItemFinder, AllegroAPIClient, DemoAllegroClient, AllegroAPIError
+from allegro_search import MultiItemFinder, AllegroAPIClient, AllegroAPIError
 
 st.set_page_config(
     page_title="Allegro Multi-Item Finder",
@@ -15,20 +15,11 @@ st.set_page_config(
 st.title("🛍️ Allegro Multi-Item Finder")
 st.markdown("Znajdź sprzedawcę na Allegro, który posiada **wszystkie lub większość** poszukiwanych przez Ciebie przedmiotów! Zaoszczędź na wysyłce.")
 
-st.sidebar.header("⚙️ Ustawienia API & Wyszukiwania")
+st.sidebar.header("🔑 Dane Logowania Allegro API")
 
-mode = st.sidebar.radio(
-    "Tryb działania",
-    ["Demo (Dane testowe)", "Allegro API (Wymaga kluczy API)"]
-)
-
-client_id = ""
-client_secret = ""
-
-if mode == "Allegro API (Wymaga kluczy API)":
-    client_id = st.sidebar.text_input("Client ID", value=os.environ.get("ALLEGRO_CLIENT_ID", ""), type="password")
-    client_secret = st.sidebar.text_input("Client Secret", value=os.environ.get("ALLEGRO_CLIENT_SECRET", ""), type="password")
-    use_sandbox = st.sidebar.checkbox("Użyj środowiska Sandbox", value=False)
+client_id = st.sidebar.text_input("Client ID", value=os.environ.get("ALLEGRO_CLIENT_ID", ""), type="password")
+client_secret = st.sidebar.text_input("Client Secret", value=os.environ.get("ALLEGRO_CLIENT_SECRET", ""), type="password")
+use_sandbox = st.sidebar.checkbox("Użyj środowiska Sandbox", value=False)
 
 st.sidebar.subheader("Filtry dopasowania")
 match_mode = st.sidebar.selectbox(
@@ -59,33 +50,22 @@ search_button = st.button("🔎 Szukaj Sprzedawców", type="primary")
 if search_button:
     if not keywords:
         st.warning("⚠️ Proszę wprowadzić przynajmniej jeden przedmiot.")
+    elif not client_id or not client_secret:
+        st.error("❌ Musisz podać Client ID oraz Client Secret dla Allegro API!")
     else:
         st.info(f"Szukanie dla {len(keywords)} przedmiotów: **{', '.join(keywords)}**")
 
-        client = None
-        if mode == "Demo (Dane testowe)":
-            client = DemoAllegroClient()
-        else:
-            if not client_id or not client_secret:
-                st.error("❌ Musisz podać Client ID oraz Client Secret dla Allegro API!")
-            else:
-                try:
-                    client = AllegroAPIClient(client_id=client_id, client_secret=client_secret, sandbox=use_sandbox)
-                except Exception as e:
-                    st.error(f"❌ Błąd inicjalizacji klienta Allegro: {e}")
-
-        if client:
+        try:
+            client = AllegroAPIClient(client_id=client_id, client_secret=client_secret, sandbox=use_sandbox)
+            client.authenticate()
             finder = MultiItemFinder(client)
+
             with st.spinner("Przeszukiwanie ofert na Allegro..."):
-                try:
-                    matches = finder.find_sellers(
-                        keywords=keywords,
-                        require_all=require_all,
-                        min_items=min_items
-                    )
-                except Exception as e:
-                    st.error(f"❌ Błąd wyszukiwania: {e}")
-                    matches = []
+                matches = finder.find_sellers(
+                    keywords=keywords,
+                    require_all=require_all,
+                    min_items=min_items
+                )
 
             if not matches:
                 st.warning("Nie znaleziono sprzedawców spełniających kryteria.")
@@ -114,7 +94,6 @@ if search_button:
                         st.dataframe(df, use_container_width=True)
 
                         st.markdown("---")
-                        # Detailed offers drop down if seller has multiple for a keyword
                         st.caption("Wszystkie oferty od tego sprzedawcy podzielone na frazy:")
                         for kw, offers_list in match.offers_by_keyword.items():
                             st.write(f"• **{kw}** ({len(offers_list)} ofert):")
@@ -122,7 +101,6 @@ if search_button:
                                 smart_tag = "🚀 [SMART]" if off.is_smart else ""
                                 st.markdown(f"  - [{off.title}]({off.url}) — **{off.price:.2f} {off.currency}** {smart_tag}")
 
-                # Export section
                 st.subheader("📥 Eksportuj wyniki")
                 export_data = []
                 for m in matches:
@@ -142,3 +120,6 @@ if search_button:
                     file_name="allegro_multi_item_results.json",
                     mime="application/json"
                 )
+
+        except Exception as e:
+            st.error(f"❌ Błąd autoryzacji lub wyszukiwania w Allegro API: {e}")

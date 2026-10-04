@@ -11,7 +11,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.tree import Tree
 
-from allegro_search import MultiItemFinder, AllegroAPIClient, DemoAllegroClient, AllegroAPIError
+from allegro_search import MultiItemFinder, AllegroAPIClient, AllegroAPIError
 
 console = Console()
 
@@ -74,9 +74,19 @@ def main():
         help="Fraze/przedmioty do wyszukania (np. 'wiedźmin' 'diuna')"
     )
     parser.add_argument(
-        "--demo",
+        "--client-id",
+        type=str,
+        help="Client ID dla Allegro API"
+    )
+    parser.add_argument(
+        "--client-secret",
+        type=str,
+        help="Client Secret dla Allegro API"
+    )
+    parser.add_argument(
+        "--sandbox",
         action="store_true",
-        help="Użyj trybu demonstracyjnego (przykładowe dane bez wymaganych kluczy API)"
+        help="Użyj środowiska Allegro Sandbox"
     )
     parser.add_argument(
         "--allow-partial",
@@ -112,6 +122,14 @@ def main():
         console.print("[bold red]Brak słów kluczowych do wyszukania. Zakończono.[/bold red]")
         sys.exit(1)
 
+    client_id = args.client_id or os.environ.get("ALLEGRO_CLIENT_ID")
+    client_secret = args.client_secret or os.environ.get("ALLEGRO_CLIENT_SECRET")
+
+    if not client_id or not client_secret:
+        console.print("[bold red]Brak ID klienta i sekretu Allegro API (Client ID, Client Secret).[/bold red]")
+        console.print("Podaj je jako parametry --client-id / --client-secret lub w zmiennych środowiskowych ALLEGRO_CLIENT_ID i ALLEGRO_CLIENT_SECRET.")
+        sys.exit(1)
+
     console.print(Panel.fit(
         f"[bold blue]Allegro Multi-Item Finder[/bold blue]\n\n"
         f"Poszukiwane przedmioty ({len(keywords)}): [yellow]{', '.join(keywords)}[/yellow]\n"
@@ -119,20 +137,12 @@ def main():
         title="Wyszukiwanie"
     ))
 
-    # Determine client
-    client_id = os.environ.get("ALLEGRO_CLIENT_ID")
-    client_secret = os.environ.get("ALLEGRO_CLIENT_SECRET")
-
-    if args.demo or not (client_id and client_secret):
-        if not args.demo and not (client_id and client_secret):
-            console.print("[yellow]Brak zmiennych środowiskowych ALLEGRO_CLIENT_ID i ALLEGRO_CLIENT_SECRET. Uruchamianie w trybie DEMO z danymi testowymi.[/yellow]\n")
-        client = DemoAllegroClient()
-    else:
-        try:
-            client = AllegroAPIClient(client_id, client_secret)
-        except Exception as e:
-            console.print(f"[red]Błąd inicjalizacji klienta API: {e}. Przełączanie na tryb DEMO.[/red]\n")
-            client = DemoAllegroClient()
+    try:
+        client = AllegroAPIClient(client_id=client_id, client_secret=client_secret, sandbox=args.sandbox)
+        client.authenticate()
+    except Exception as e:
+        console.print(f"[bold red]Błąd autoryzacji Allegro API: {e}[/bold red]")
+        sys.exit(1)
 
     finder = MultiItemFinder(client)
 

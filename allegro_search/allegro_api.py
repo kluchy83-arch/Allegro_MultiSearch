@@ -1,4 +1,4 @@
-"""Allegro API client and demo provider."""
+"""Allegro API client module."""
 
 import requests
 import json
@@ -33,7 +33,7 @@ class AllegroAPIClient:
     def authenticate(self) -> str:
         """Obtain client_credentials access token."""
         if not self.client_id or not self.client_secret:
-            raise AllegroAPIError("Brak ID klienta lub sekretu Allegro API (client_id, client_secret).")
+            raise AllegroAPIError("Brak ID klienta lub sekretu Allegro API (Client ID, Client Secret).")
 
         data = {'grant_type': 'client_credentials'}
         try:
@@ -126,61 +126,3 @@ class AllegroAPIClient:
             except Exception:
                 continue
         return offers
-
-
-class DemoAllegroClient:
-    """Mock/Demo client providing rich sample data for testing and offline usage."""
-
-    def __init__(self):
-        self.sellers = [
-            Seller(id="101", login="Ksiegarnia_Przecena", is_super_seller=True, rating=4.95),
-            Seller(id="102", login="SuperSklep_PL", is_super_seller=True, rating=4.88),
-            Seller(id="103", login="Antykwariat_Online", is_super_seller=False, rating=4.70),
-            Seller(id="104", login="Tech_Komputer_Store", is_super_seller=True, rating=4.99),
-        ]
-
-        # Preset catalog of offers per query keyword and seller
-        self.catalog = {
-            "wiedźmin": [
-                Offer("w1", "Wiedźmin Tom 1 Ostatnie Życzenie - A. Sapkowski", 34.90, "PLN", self.sellers[0], "https://allegro.pl/oferta/w1", is_smart=True),
-                Offer("w2", "Wiedźmin Ostatnie Życzenie twarda oprawa", 39.00, "PLN", self.sellers[1], "https://allegro.pl/oferta/w2", is_smart=True),
-                Offer("w3", "Wiedźmin Tom 1 wydanie kieszonkowe", 29.99, "PLN", self.sellers[2], "https://allegro.pl/oferta/w3", is_smart=False),
-            ],
-            "diuna": [
-                Offer("d1", "Diuna Tom 1 - Frank Herbert - Książka", 42.50, "PLN", self.sellers[0], "https://allegro.pl/oferta/d1", is_smart=True),
-                Offer("d2", "Diuna Wydanie Ilustrowane Frank Herbert", 55.00, "PLN", self.sellers[1], "https://allegro.pl/oferta/d2", is_smart=True),
-                Offer("d3", "Diuna - Klasyka SF", 38.00, "PLN", self.sellers[2], "https://allegro.pl/oferta/d3", is_smart=False),
-            ],
-            "władca pierścieni": [
-                Offer("p1", "Władca Pierścieni Drużyna Pierścienia", 45.00, "PLN", self.sellers[0], "https://allegro.pl/oferta/p1", is_smart=True),
-                Offer("p2", "Władca Pierścieni Trylogia w 1 tomie", 89.90, "PLN", self.sellers[1], "https://allegro.pl/oferta/p2", is_smart=True),
-            ],
-            "myszka": [
-                Offer("m1", "Myszka Bezprzewodowa Logitech M185", 49.99, "PLN", self.sellers[3], "https://allegro.pl/oferta/m1", is_smart=True),
-                Offer("m2", "Myszka komputerowa USB Ergonomiczna", 25.00, "PLN", self.sellers[1], "https://allegro.pl/oferta/m2", is_smart=True),
-            ],
-            "klawiatura": [
-                Offer("k1", "Klawiatura Mechaniczna RGB USB", 129.00, "PLN", self.sellers[3], "https://allegro.pl/oferta/k1", is_smart=True),
-                Offer("k2", "Klawiatura Przewodowa Buro", 35.00, "PLN", self.sellers[1], "https://allegro.pl/oferta/k2", is_smart=True),
-            ]
-        }
-
-    def search_offers(self, phrase: str, seller_id: Optional[str] = None, limit: int = 60) -> List[Offer]:
-        phrase_lower = phrase.lower().strip()
-        matched_offers = []
-
-        for key, offers in self.catalog.items():
-            if key in phrase_lower or phrase_lower in key:
-                matched_offers.extend(offers)
-
-        # Fallback dynamic mock offer generator if custom query isn't in standard mock catalog
-        if not matched_offers:
-            matched_offers = [
-                Offer(f"gen_1_{phrase_lower}", f"Przedmiot {phrase.title()} - Najlepsza Cena", 29.99, "PLN", self.sellers[0], f"https://allegro.pl/oferta/gen1-{phrase_lower}", is_smart=True),
-                Offer(f"gen_2_{phrase_lower}", f"{phrase.title()} - Okazja Promocja", 32.50, "PLN", self.sellers[1], f"https://allegro.pl/oferta/gen2-{phrase_lower}", is_smart=True),
-            ]
-
-        if seller_id:
-            matched_offers = [o for o in matched_offers if o.seller.id == seller_id or o.seller.login == seller_id]
-
-        return matched_offers[:limit]

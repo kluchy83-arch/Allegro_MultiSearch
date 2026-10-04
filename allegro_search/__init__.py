@@ -1,7 +1,7 @@
 """Init file for allegro_search package."""
 
 from .models import Seller, Offer, SearchResult, SellerMatch
-from .allegro_api import AllegroAPIClient, DemoAllegroClient, AllegroAPIError
+from .allegro_api import AllegroAPIClient, AllegroAPIError
 from .finder import MultiItemFinder
 
 __all__ = [
@@ -10,7 +10,6 @@ __all__ = [
     "SearchResult",
     "SellerMatch",
     "AllegroAPIClient",
-    "DemoAllegroClient",
     "AllegroAPIError",
     "MultiItemFinder"
 ]

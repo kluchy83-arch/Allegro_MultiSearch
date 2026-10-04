@@ -2,14 +2,14 @@
 
 from typing import List, Dict, Union, Optional
 from .models import Offer, Seller, SellerMatch, SearchResult
-from .allegro_api import AllegroAPIClient, DemoAllegroClient
+from .allegro_api import AllegroAPIClient
 
 
 class MultiItemFinder:
     """Finds sellers that have multiple desired items in stock."""
 
-    def __init__(self, client: Optional[Union[AllegroAPIClient, DemoAllegroClient]] = None):
-        self.client = client or DemoAllegroClient()
+    def __init__(self, client: AllegroAPIClient):
+        self.client = client
 
     def find_sellers(
         self,
@@ -71,12 +71,15 @@ class MultiItemFinder:
 
                 seller_map[seller_key]["offers_by_kw"][kw].append(offer)
 
-            # If live API client, directly query candidate sellers for this keyword to maximize matches
-            if isinstance(self.client, AllegroAPIClient) and seller_map:
+            # Directly query candidate sellers for this keyword to maximize matches
+            if seller_map:
                 for seller_key, entry in list(seller_map.items()):
                     if not entry["offers_by_kw"][kw]:
-                        targeted_offers = self.client.search_offers(kw, seller_id=entry["seller"].id, limit=20)
-                        entry["offers_by_kw"][kw].extend(targeted_offers)
+                        try:
+                            targeted_offers = self.client.search_offers(kw, seller_id=entry["seller"].id, limit=20)
+                            entry["offers_by_kw"][kw].extend(targeted_offers)
+                        except Exception:
+                            pass
 
         # Convert to SellerMatch list and filter
         results: List[SellerMatch] = []
