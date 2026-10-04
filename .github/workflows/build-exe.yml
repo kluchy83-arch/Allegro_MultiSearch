@@ -1,0 +1,35 @@
+name: Build Windows x64 Executable GUI
+
+on:
+  push:
+    branches: [ main, master, allegro-multi-item-finder* ]
+  workflow_dispatch:
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+
+    - name: Build GUI Executable with PyInstaller
+      run: |
+        pyinstaller --noconsole --onefile --name="AllegroMultiItemFinderGUI" gui.py
+
+    - name: Upload Windows Executable Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AllegroMultiItemFinderGUI-Win64
+        path: dist/AllegroMultiItemFinderGUI.exe
