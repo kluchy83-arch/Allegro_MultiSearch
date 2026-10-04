@@ -15,7 +15,7 @@ from .config import AllegroConfig
 
 logger = logging.getLogger("AllegroMultiSearch")
 
-DEFAULT_VALID_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 AllegroMultiSearch/1.0"
+DEFAULT_VALID_USER_AGENT = "AllegroMultiSearch/1.0"
 
 
 class AllegroAPIError(Exception):
@@ -67,11 +67,6 @@ class AllegroAPIClient:
     def __init__(self, config: Optional[AllegroConfig] = None):
         self.config = config or AllegroConfig.load()
 
-        # Ensure user_agent is always a valid browser string
-        ua = self.config.user_agent.strip()
-        if not ua or "h/tree" in ua or "git" in ua or "Mozilla" not in ua:
-            self.config.user_agent = DEFAULT_VALID_USER_AGENT
-
         if self.config.use_sandbox:
             self.domain = "allegro.pl.allegro-sandbox.io"
             self.auth_url = f"https://{self.domain}/auth/oauth/token"
@@ -88,8 +83,8 @@ class AllegroAPIClient:
         self._offers_cache: Dict[str, Any] = {}
 
     def get_user_agent(self) -> str:
-        ua = self.config.user_agent.strip()
-        if not ua or "h/tree" in ua or "git" in ua or "Mozilla" not in ua:
+        ua = (self.config.user_agent or "").strip()
+        if not ua:
             return DEFAULT_VALID_USER_AGENT
         return ua
 
@@ -270,35 +265,7 @@ class AllegroAPIClient:
         if not self.config.client_id or not self.config.client_secret:
             raise AllegroAPIError("Brak Client ID lub Client Secret.")
 
-        # If user_access_token exists, try testing endpoint /offers/listing directly first
-        if self.config.user_access_token:
-            try:
-                headers = self.get_headers()
-                url = f"{self.api_url}/offers/listing"
-                params = {'phrase': 'test', 'limit': 1}
-                r_list = requests.get(url, headers=headers, params=params, timeout=10)
-
-                if r_list.status_code == 401 and self.config.user_refresh_token:
-                    # Token expired, refresh and retry
-                    self.refresh_user_token()
-                    headers = self.get_headers()
-                    r_list = requests.get(url, headers=headers, params=params, timeout=10)
-
-                if r_list.status_code == 200:
-                    return {"status": "SUCCESS", "message": "Połączenie z Allegro REST API powiodło się! Token użytkownika jest aktywny."}
-                else:
-                    err_json = r_list.json() if r_list.headers.get("content-type", "").startswith("application/") else {}
-                    err_msg = err_json.get("error_description") or err_json.get("message") or r_list.text[:200]
-                    raise AllegroAPIError(
-                        f"Błąd {r_list.status_code} na /offers/listing: {err_msg}\n\n"
-                        "Zaloguj się ponownie przyciskiem 'Zaloguj w Przeglądarce (Web Flow)'."
-                    )
-            except AllegroAPIError:
-                raise
-            except Exception as e:
-                raise AllegroAPIError(f"Błąd weryfikacji tokena użytkownika: {e}")
-
-        # Fallback test: verify client credentials
+        # First verify client_credentials token request
         data = {'grant_type': 'client_credentials'}
         headers = {
             'User-Agent': self.get_user_agent(),
@@ -318,11 +285,44 @@ class AllegroAPIClient:
             )
         resp.raise_for_status()
 
+        # If user access token exists, test GET /offers/listing
+        if self.config.user_access_token:
+            try:
+                headers = self.get_headers()
+                url = f"{self.api_url}/offers/listing"
+                params = {'phrase': 'test', 'limit': 1}
+                r_list = requests.get(url, headers=headers, params=params, timeout=10)
+
+                # If token expired, try refreshing once
+                if (r_list.status_code in (401, 403)) and self.config.user_refresh_token:
+                    try:
+                        self.refresh_user_token()
+                        headers = self.get_headers()
+                        r_list = requests.get(url, headers=headers, params=params, timeout=10)
+                    except Exception:
+                        pass
+
+                if r_list.status_code == 200:
+                    return {"status": "SUCCESS", "message": "Połączenie z Allegro REST API powiodło się! Token użytkownika jest aktywny i ma dostęp do serwisu."}
+                elif r_list.status_code == 403:
+                    err_json = r_list.json() if r_list.headers.get("content-type", "").startswith("application/") else {}
+                    err_msg = err_json.get("error_description") or err_json.get("message") or r_list.text[:200]
+                    raise AllegroAPIError(
+                        f"Błąd 403 na /offers/listing: {err_msg}\n\n"
+                        "Wskazówka: Zaloguj się ponownie przyciskiem 'Zaloguj w Przeglądarce (Web Flow)'."
+                    )
+                else:
+                    r_list.raise_for_status()
+            except AllegroAPIError:
+                raise
+            except Exception as e:
+                raise AllegroAPIError(f"Błąd weryfikacji tokena użytkownika: {e}")
+
         return {
             "status": "SUCCESS",
             "message": "Client ID oraz Client Secret są poprawne!\n\n"
                        "Uwaga: Zaloguj konto Allegro przyciskiem 'Zaloguj w Przeglądarce (Web Flow)', "
-                       "aby móc wykonywać zapytania wyszukiwania ofert."
+                       "aby powiązać token użytkownika dla pełnego dostępu do ofert."
         }
 
     def authenticate(self, force: bool = False) -> str:
@@ -384,7 +384,6 @@ class AllegroAPIClient:
                 resp = requests.get(url, headers=headers, params=params, timeout=12)
 
                 if resp.status_code == 401:
-                    # Token expired, try refreshing
                     if self.config.user_refresh_token:
                         try:
                             self.refresh_user_token()
@@ -404,6 +403,19 @@ class AllegroAPIClient:
                     continue
 
                 if resp.status_code == 403:
+                    # Try refreshing user token if available
+                    if self.config.user_refresh_token and attempt == 1:
+                        try:
+                            self.refresh_user_token()
+                            headers = self.get_headers()
+                            resp = requests.get(url, headers=headers, params=params, timeout=12)
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                self._offers_cache[cache_key] = data
+                                return data
+                        except Exception:
+                            pass
+
                     err_json = resp.json() if resp.headers.get("content-type", "").startswith("application/") else {}
                     err_msg = err_json.get("error_description") or err_json.get("message") or resp.text[:200]
                     raise AllegroAPIError(

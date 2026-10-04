@@ -201,7 +201,7 @@ class AllegroMultiSearchGUI:
         self.config.client_secret = self.cfg_client_secret.get().strip()
 
         ua = self.cfg_user_agent.get().strip()
-        if not ua or "h/tree" in ua or "git" in ua:
+        if not ua:
             ua = DEFAULT_VALID_USER_AGENT
             self.cfg_user_agent.delete(0, tk.END)
             self.cfg_user_agent.insert(0, ua)
